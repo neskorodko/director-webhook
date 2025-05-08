@@ -4,6 +4,8 @@ require('dotenv').config();
 const { Client } = require('pg');
 
 const app = express();
+const cors = require('cors');
+app.use(cors());
 const PORT = process.env.PORT || 3000;
 
 app.use(express.json());
