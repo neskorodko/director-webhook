@@ -74,6 +74,38 @@ app.post('/webhook', async (req, res) => {
   res.sendStatus(200);
 });
 
+// 1) Повернути всі ліди
+app.get('/leads', async (req, res) => {
+  try {
+    const { rows } = await db.query(`
+      SELECT id, ig_id, first_seen, status
+      FROM leads
+      ORDER BY first_seen DESC
+    `);
+    res.json(rows);
+  } catch (e) {
+    console.error('❌ Error fetching leads', e);
+    res.status(500).send('Server error');
+  }
+});
+
+// 2) Повернути історію повідомлень конкретного ліда
+app.get('/leads/:id/messages', async (req, res) => {
+  const leadId = req.params.id;
+  try {
+    const { rows } = await db.query(`
+      SELECT text, timestamp, direction
+      FROM messages
+      WHERE lead_id = $1
+      ORDER BY timestamp
+    `, [leadId]);
+    res.json(rows);
+  } catch (e) {
+    console.error('❌ Error fetching messages', e);
+    res.status(500).send('Server error');
+  }
+});
+
 // Запуск сервера
 app.listen(PORT, () => {
   console.log(`🚀 Сервер працює на порті ${PORT}`);
