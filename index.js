@@ -53,7 +53,22 @@ app.post('/webhook', async (req, res) => {
          ON CONFLICT (ig_id) DO NOTHING`,
         [igId, ts]
       );
+      
+      // 2) Підтягнути username і full_name через Graph API
+     const profile = await fetch(
+    `https://graph.facebook.com/${igId}` +
+    `?fields=username,name&access_token=${process.env.PAGE_ACCESS_TOKEN}`
+  ).then(r => r.json());
 
+  if (profile.username) {
+    await db.query(
+      `UPDATE leads
+         SET username    = $1,
+             full_name   = $2
+       WHERE ig_id = $3`,
+      [profile.username, profile.name, igId]
+    );
+  }
       // 2) Отримати lead_id
       const { rows } = await db.query(
         `SELECT id FROM leads WHERE ig_id = $1`,
