@@ -55,20 +55,23 @@ app.post('/webhook', async (req, res) => {
       );
       
       // 2) Підтягнути username і full_name через Graph API
-     const profile = await fetch(
+     const { rows: exist } = await db.query(
+  `SELECT username FROM leads WHERE ig_id = $1`, [igId]
+);
+if (!exist[0].username) {
+  const profile = await fetch(
     `https://graph.facebook.com/${igId}` +
-    `?fields=username,name&access_token=${process.env.PAGE_ACCESS_TOKEN}`
+    `?fields=username,name&access_token=${PAGE_ACCESS_TOKEN}`
   ).then(r => r.json());
-
   if (profile.username) {
-    await db.query(
-      `UPDATE leads
-         SET username    = $1,
-             full_name   = $2
-       WHERE ig_id = $3`,
-      [profile.username, profile.name, igId]
-    );
+    await db.query(`
+      UPDATE leads
+         SET username  = $1,
+             full_name = $2
+       WHERE ig_id = $3
+    `, [profile.username, profile.name, igId]);
   }
+}
       // 2) Отримати lead_id
       const { rows } = await db.query(
         `SELECT id FROM leads WHERE ig_id = $1`,
