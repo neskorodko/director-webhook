@@ -3,6 +3,7 @@ const express = require('express');
 require('dotenv').config();
 const { Client } = require('pg');
 
+const PAGE_ACCESS_TOKEN = process.env.PAGE_ACCESS_TOKEN;
 const app = express();
 const cors = require('cors');
 app.use(cors());
