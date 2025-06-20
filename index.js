@@ -17,6 +17,9 @@ const VERIFY_TOKEN = process.env.VERIFY_TOKEN || 'director_verify';
 // Instagram API токен
 const PAGE_ACCESS_TOKEN = process.env.PAGE_ACCESS_TOKEN;
 
+// ID власного Instagram аккаунту (щоб не зберігати його як ліда)
+const OWN_INSTAGRAM_ID = process.env.OWN_INSTAGRAM_ID;
+
 // Функція для відправки повідомлення через Instagram API
 async function sendInstagramMessage(recipientId, messageText) {
   if (!PAGE_ACCESS_TOKEN) {
@@ -90,10 +93,16 @@ app.post('/webhook', async (req, res) => {
       const text = msg.message.text || '';
       const ts = new Date(msg.timestamp);
 
-      // 1) Upsert ліда
+      // Перевіряємо чи це не наш власний аккаунт
+      if (OWN_INSTAGRAM_ID && igId === OWN_INSTAGRAM_ID) {
+        console.log('🔄 Пропускаємо повідомлення від власного аккаунту:', igId);
+        return res.sendStatus(200);
+      }
+
+      // 1) Upsert ліда (тільки якщо це не наш аккаунт)
       await db.query(
-        `INSERT INTO leads (ig_id, first_seen)
-         VALUES ($1, $2)
+        `INSERT INTO leads (ig_id, first_seen, status)
+         VALUES ($1, $2, 'NEW')
          ON CONFLICT (ig_id) DO NOTHING`,
         [igId, ts]
       );
@@ -143,11 +152,25 @@ if (!exist[0].username) {
 // 1) Повернути весь список лідів
 app.get('/leads', async (req, res) => {
   try {
-    const { rows } = await db.query(`
+    const { status } = req.query;
+    
+    let query = `
       SELECT id, ig_id, username, full_name, first_seen, status
       FROM leads
-      ORDER BY first_seen DESC
-    `);
+      WHERE (is_own_account IS FALSE OR is_own_account IS NULL)
+    `;
+    
+    const params = [];
+    
+    // Фільтрація за статусом якщо передано
+    if (status && status !== 'all') {
+      query += ` AND status = $1`;
+      params.push(status);
+    }
+    
+    query += ` ORDER BY first_seen DESC`;
+    
+    const { rows } = await db.query(query, params);
     res.json(rows);
   } catch (e) {
     console.error('Error in GET /leads', e);
@@ -274,14 +297,41 @@ app.post('/messages', async (req, res) => {
   }
 });
 
+// Отримання списку статусів лідів
+app.get('/lead-statuses', (req, res) => {
+  const statuses = [
+    { value: 'NEW', label: 'Новий', color: 'blue' },
+    { value: 'CONTACTED', label: 'Контакт встановлено', color: 'yellow' },
+    { value: 'QUALIFIED', label: 'Кваліфікований', color: 'purple' },
+    { value: 'PROPOSAL', label: 'Пропозиція надіслана', color: 'orange' },
+    { value: 'NEGOTIATION', label: 'Переговори', color: 'indigo' },
+    { value: 'CLOSED_WON', label: 'Успішно закрито', color: 'green' },
+    { value: 'CLOSED_LOST', label: 'Втрачено', color: 'red' },
+    { value: 'ON_HOLD', label: 'На паузі', color: 'gray' },
+    { value: 'FOLLOW_UP', label: 'Повторний контакт', color: 'pink' }
+  ];
+  
+  res.json(statuses);
+});
+
 // Оновлення статусу ліда
 app.patch('/leads/:id', async (req, res) => {
   try {
     const { id } = req.params;
     const { status } = req.body;
 
+    // Валідація статусу
+    const validStatuses = [
+      'NEW', 'CONTACTED', 'QUALIFIED', 'PROPOSAL', 'NEGOTIATION',
+      'CLOSED_WON', 'CLOSED_LOST', 'ON_HOLD', 'FOLLOW_UP'
+    ];
+    
+    if (!validStatuses.includes(status)) {
+      return res.status(400).json({ error: 'Invalid status' });
+    }
+
     const result = await db.query(
-      'UPDATE leads SET status = $1 WHERE id = $2 RETURNING *',
+      'UPDATE leads SET status = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 RETURNING *',
       [status, id]
     );
 

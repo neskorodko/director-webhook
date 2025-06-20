@@ -44,8 +44,16 @@ DATABASE_URL=postgresql://user:password@localhost:5432/director
 VERIFY_TOKEN=your_verify_token
 PAGE_ACCESS_TOKEN=your_page_access_token
 
+# Your Instagram account ID (to prevent saving your own messages as leads)
+OWN_INSTAGRAM_ID=your_instagram_user_id
+
 # Server
 PORT=3000
+```
+
+**Важливо:** `OWN_INSTAGRAM_ID` - це ID вашого власного Instagram аккаунту. Отримати його можна через Graph API:
+```bash
+curl "https://graph.facebook.com/me?access_token=YOUR_PAGE_ACCESS_TOKEN"
 ```
 
 ### 4. Налаштування бази даних
@@ -53,9 +61,21 @@ PORT=3000
 Виконайте міграції з папки `migrations/`:
 
 ```sql
--- 000_init.sql
--- 001_create_templates.sql
+-- 000_init.sql - базові таблиці
+-- 001_create_templates.sql - шаблони повідомлень
+-- 002_add_lead_statuses.sql - розширені статуси лідів
 ```
+
+#### Статуси лідів:
+- `NEW` - Новий лід
+- `CONTACTED` - Встановлено контакт
+- `QUALIFIED` - Кваліфікований лід
+- `PROPOSAL` - Надіслано пропозицію
+- `NEGOTIATION` - Переговори
+- `CLOSED_WON` - Успішно закрито
+- `CLOSED_LOST` - Втрачено
+- `ON_HOLD` - На паузі
+- `FOLLOW_UP` - Потребує повторного контакту
 
 ## 🚀 Запуск
 
@@ -78,9 +98,10 @@ NODE_ENV=production npm start
 - `POST /webhook` - обробка вхідних повідомлень
 
 ### Ліди
-- `GET /leads` - отримати список лідів
+- `GET /leads` - отримати список лідів (з фільтрацією за статусом)
 - `GET /leads/:id` - отримати конкретного ліда
 - `PATCH /leads/:id` - оновити статус ліда
+- `GET /lead-statuses` - отримати список доступних статусів
 
 ### Чати
 - `GET /chats/:id` - отримати повідомлення чату
