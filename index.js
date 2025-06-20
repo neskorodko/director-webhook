@@ -59,6 +59,57 @@ async function sendInstagramMessage(recipientId, messageText) {
   }
 }
 
+// Функція для отримання історії повідомлень з Instagram API
+async function fetchInstagramMessageHistory(igId) {
+  if (!PAGE_ACCESS_TOKEN) {
+    console.error('❌ PAGE_ACCESS_TOKEN не встановлено');
+    return [];
+  }
+
+  try {
+    // Отримуємо conversation ID
+    const conversationsResponse = await fetch(
+      `https://graph.facebook.com/v18.0/me/conversations?platform=instagram&user_id=${igId}&access_token=${PAGE_ACCESS_TOKEN}`
+    );
+    
+    const conversationsData = await conversationsResponse.json();
+    
+    if (!conversationsData.data || conversationsData.data.length === 0) {
+      console.log('📭 Конверсація не знайдена для користувача:', igId);
+      return [];
+    }
+
+    const conversationId = conversationsData.data[0].id;
+    
+    // Отримуємо повідомлення з конверсації
+    const messagesResponse = await fetch(
+      `https://graph.facebook.com/v18.0/${conversationId}?fields=messages{message,created_time,from}&access_token=${PAGE_ACCESS_TOKEN}`
+    );
+    
+    const messagesData = await messagesResponse.json();
+    
+    if (!messagesData.messages || !messagesData.messages.data) {
+      console.log('📭 Повідомлення не знайдені для конверсації:', conversationId);
+      return [];
+    }
+
+    // Форматуємо повідомлення
+    const formattedMessages = messagesData.messages.data.map(msg => ({
+      text: msg.message,
+      timestamp: new Date(msg.created_time),
+      direction: msg.from.id === igId ? 'inbound' : 'outbound',
+      instagram_message_id: msg.id
+    }));
+
+    console.log(`📨 Отримано ${formattedMessages.length} повідомлень з Instagram API для користувача ${igId}`);
+    return formattedMessages;
+
+  } catch (error) {
+    console.error('❌ Помилка отримання історії повідомлень з Instagram:', error);
+    return [];
+  }
+}
+
 // Підключення до бази даних
 const db = new Client({
   connectionString: process.env.DATABASE_URL || 'postgresql://postgres:postgres@localhost:5432/director',
@@ -379,10 +430,72 @@ app.patch('/leads/:id', async (req, res) => {
   }
 });
 
+// Функція для синхронізації історії повідомлень з Instagram
+async function syncMessageHistory(leadId, igId) {
+  try {
+    // Отримуємо історію з Instagram API
+    const instagramMessages = await fetchInstagramMessageHistory(igId);
+    
+    if (instagramMessages.length === 0) {
+      return 0;
+    }
+
+    let syncedCount = 0;
+
+    for (const msg of instagramMessages) {
+      try {
+        // Перевіряємо чи повідомлення вже існує
+        const existingMessage = await db.query(
+          'SELECT id FROM messages WHERE lead_id = $1 AND instagram_message_id = $2',
+          [leadId, msg.instagram_message_id]
+        );
+
+        if (existingMessage.rows.length === 0) {
+          // Додаємо нове повідомлення
+          await db.query(
+            `INSERT INTO messages (lead_id, text, direction, timestamp, instagram_message_id)
+             VALUES ($1, $2, $3, $4, $5)`,
+            [leadId, msg.text, msg.direction, msg.timestamp, msg.instagram_message_id]
+          );
+          syncedCount++;
+        }
+      } catch (insertError) {
+        console.error('❌ Помилка вставки повідомлення:', insertError);
+      }
+    }
+
+    console.log(`✅ Синхронізовано ${syncedCount} нових повідомлень для ліда ${leadId}`);
+    return syncedCount;
+
+  } catch (error) {
+    console.error('❌ Помилка синхронізації історії:', error);
+    return 0;
+  }
+}
+
 // Отримати повідомлення чату
 app.get('/chats/:id', async (req, res) => {
   try {
     const { id } = req.params;
+    const { sync = 'false' } = req.query;
+    
+    // Отримуємо інформацію про ліда
+    const leadResult = await db.query(
+      'SELECT ig_id FROM leads WHERE id = $1',
+      [id]
+    );
+
+    if (leadResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Lead not found' });
+    }
+
+    const lead = leadResult.rows[0];
+
+    // Якщо потрібна синхронізація, спочатку синхронізуємо історію
+    if (sync === 'true') {
+      console.log('🔄 Синхронізація історії повідомлень для ліда:', id);
+      await syncMessageHistory(id, lead.ig_id);
+    }
     
     // Отримуємо повідомлення ліда
     const messagesResult = await db.query(
@@ -401,7 +514,8 @@ app.get('/chats/:id', async (req, res) => {
     );
 
     res.json({
-      messages: messagesResult.rows
+      messages: messagesResult.rows,
+      synced: sync === 'true'
     });
   } catch (error) {
     console.error('Error getting chat messages:', error);
@@ -466,6 +580,42 @@ app.post('/chats/:id/send', async (req, res) => {
   }
 });
 
+// Endpoint для синхронізації історії повідомлень
+app.post('/chats/:id/sync', async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    // Отримуємо інформацію про ліда
+    const leadResult = await db.query(
+      'SELECT ig_id, username FROM leads WHERE id = $1',
+      [id]
+    );
+
+    if (leadResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Lead not found' });
+    }
+
+    const lead = leadResult.rows[0];
+    
+    console.log(`🔄 Початок синхронізації історії для ліда ${lead.username || lead.ig_id}`);
+    
+    const syncedCount = await syncMessageHistory(id, lead.ig_id);
+    
+    res.json({
+      success: true,
+      message: `Синхронізовано ${syncedCount} повідомлень`,
+      syncedCount: syncedCount
+    });
+
+  } catch (error) {
+    console.error('❌ Помилка синхронізації:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
 // Endpoint для запуску міграцій
 app.post('/admin/migrate', async (req, res) => {
   try {
@@ -515,10 +665,21 @@ app.post('/admin/migrate', async (req, res) => {
       console.log('⚠️ Constraint вже існує або помилка:', e.message);
     }
 
+    // Додавання колонки для Instagram message ID
+    try {
+      await db.query(`
+        ALTER TABLE messages ADD COLUMN IF NOT EXISTS instagram_message_id VARCHAR(255);
+      `);
+      console.log('✅ Додано колонку instagram_message_id');
+    } catch (e) {
+      console.log('⚠️ Колонка instagram_message_id вже існує або помилка:', e.message);
+    }
+
     // Додавання індексів
     try {
       await db.query(`CREATE INDEX IF NOT EXISTS idx_leads_status ON leads(status);`);
       await db.query(`CREATE INDEX IF NOT EXISTS idx_leads_is_own_account ON leads(is_own_account);`);
+      await db.query(`CREATE INDEX IF NOT EXISTS idx_messages_instagram_id ON messages(instagram_message_id);`);
       console.log('✅ Додано індекси');
     } catch (e) {
       console.log('⚠️ Індекси вже існують або помилка:', e.message);

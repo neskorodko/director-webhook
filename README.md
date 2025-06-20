@@ -106,6 +106,7 @@ NODE_ENV=production npm start
 ### Чати
 - `GET /chats/:id` - отримати повідомлення чату
 - `POST /chats/:id/send` - відправити повідомлення
+- `POST /chats/:id/sync` - синхронізувати історію повідомлень з Instagram
 
 ### Шаблони
 - `GET /templates` - отримати шаблони повідомлень
