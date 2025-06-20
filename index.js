@@ -398,6 +398,93 @@ app.get('/lead-statuses', (req, res) => {
   res.json(statuses);
 });
 
+// API для шаблонів повідомлень
+app.get('/templates', async (req, res) => {
+  try {
+    const result = await db.query(`
+      SELECT id, name, content, category, created_at, updated_at
+      FROM message_templates
+      ORDER BY category, name
+    `);
+    
+    res.json(result.rows);
+  } catch (error) {
+    console.error('Error fetching templates:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Створення нового шаблону
+app.post('/templates', async (req, res) => {
+  try {
+    const { name, content, category } = req.body;
+    
+    if (!name || !content) {
+      return res.status(400).json({ error: 'Name and content are required' });
+    }
+    
+    const result = await db.query(`
+      INSERT INTO message_templates (name, content, category)
+      VALUES ($1, $2, $3)
+      RETURNING id, name, content, category, created_at, updated_at
+    `, [name, content, category || 'Загальне']);
+    
+    res.status(201).json(result.rows[0]);
+  } catch (error) {
+    console.error('Error creating template:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Оновлення шаблону
+app.put('/templates/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name, content, category } = req.body;
+    
+    if (!name || !content) {
+      return res.status(400).json({ error: 'Name and content are required' });
+    }
+    
+    const result = await db.query(`
+      UPDATE message_templates 
+      SET name = $1, content = $2, category = $3, updated_at = CURRENT_TIMESTAMP
+      WHERE id = $4
+      RETURNING id, name, content, category, created_at, updated_at
+    `, [name, content, category || 'Загальне', id]);
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Template not found' });
+    }
+    
+    res.json(result.rows[0]);
+  } catch (error) {
+    console.error('Error updating template:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Видалення шаблону
+app.delete('/templates/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    const result = await db.query(`
+      DELETE FROM message_templates WHERE id = $1
+      RETURNING id
+    `, [id]);
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Template not found' });
+    }
+    
+    res.json({ message: 'Template deleted successfully' });
+  } catch (error) {
+    console.error('Error deleting template:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 // Оновлення статусу ліда
 app.patch('/leads/:id', async (req, res) => {
   try {
@@ -697,6 +784,103 @@ app.post('/admin/migrate', async (req, res) => {
       error: error.message 
     });
   }
+});
+
+// Privacy Policy endpoint
+app.get('/privacy', (req, res) => {
+  const fs = require('fs');
+  const path = require('path');
+  
+  try {
+    const privacyPath = path.join(__dirname, 'PRIVACY_POLICY.md');
+    const content = fs.readFileSync(privacyPath, 'utf8');
+    
+    // Convert markdown to HTML for better display
+    const htmlContent = content
+      .replace(/^# (.*$)/gm, '<h1>$1</h1>')
+      .replace(/^## (.*$)/gm, '<h2>$1</h2>')
+      .replace(/^### (.*$)/gm, '<h3>$1</h3>')
+      .replace(/^\*\*(.*?)\*\*/gm, '<strong>$1</strong>')
+      .replace(/^\* (.*$)/gm, '<li>$1</li>')
+      .replace(/\n\n/g, '</p><p>')
+      .replace(/^(.*)$/gm, '<p>$1</p>')
+      .replace(/<p><li>/g, '<ul><li>')
+      .replace(/<\/li><\/p>/g, '</li></ul>');
+    
+    res.send(`
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <title>Privacy Policy - Director Admin Panel</title>
+          <meta charset="utf-8">
+          <style>
+            body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; line-height: 1.6; }
+            h1 { color: #333; border-bottom: 2px solid #333; }
+            h2 { color: #666; margin-top: 30px; }
+            h3 { color: #888; }
+          </style>
+        </head>
+        <body>
+          ${htmlContent}
+        </body>
+      </html>
+    `);
+  } catch (error) {
+    res.status(500).json({ error: 'Privacy policy not found' });
+  }
+});
+
+// Terms of Service endpoint
+app.get('/terms', (req, res) => {
+  const fs = require('fs');
+  const path = require('path');
+  
+  try {
+    const termsPath = path.join(__dirname, 'TERMS_OF_SERVICE.md');
+    const content = fs.readFileSync(termsPath, 'utf8');
+    
+    // Convert markdown to HTML for better display
+    const htmlContent = content
+      .replace(/^# (.*$)/gm, '<h1>$1</h1>')
+      .replace(/^## (.*$)/gm, '<h2>$1</h2>')
+      .replace(/^### (.*$)/gm, '<h3>$1</h3>')
+      .replace(/^\*\*(.*?)\*\*/gm, '<strong>$1</strong>')
+      .replace(/^\* (.*$)/gm, '<li>$1</li>')
+      .replace(/\n\n/g, '</p><p>')
+      .replace(/^(.*)$/gm, '<p>$1</p>')
+      .replace(/<p><li>/g, '<ul><li>')
+      .replace(/<\/li><\/p>/g, '</li></ul>');
+    
+    res.send(`
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <title>Terms of Service - Director Admin Panel</title>
+          <meta charset="utf-8">
+          <style>
+            body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; line-height: 1.6; }
+            h1 { color: #333; border-bottom: 2px solid #333; }
+            h2 { color: #666; margin-top: 30px; }
+            h3 { color: #888; }
+          </style>
+        </head>
+        <body>
+          ${htmlContent}
+        </body>
+      </html>
+    `);
+  } catch (error) {
+    res.status(500).json({ error: 'Terms of service not found' });
+  }
+});
+
+// Health check endpoint  
+app.get('/health', (req, res) => {
+  res.json({ 
+    status: 'OK', 
+    timestamp: new Date().toISOString(),
+    version: '1.0.0'
+  });
 });
 
 // Запуск сервера
