@@ -100,12 +100,28 @@ app.post('/webhook', async (req, res) => {
       }
 
       // 1) Upsert ліда (тільки якщо це не наш аккаунт)
-      await db.query(
-        `INSERT INTO leads (ig_id, first_seen, status)
-         VALUES ($1, $2, 'NEW')
-         ON CONFLICT (ig_id) DO NOTHING`,
-        [igId, ts]
-      );
+      // Перевіряємо чи існують нові колонки
+      try {
+        await db.query(
+          `INSERT INTO leads (ig_id, first_seen, status)
+           VALUES ($1, $2, 'NEW')
+           ON CONFLICT (ig_id) DO NOTHING`,
+          [igId, ts]
+        );
+      } catch (insertError) {
+        // Якщо помилка через відсутність колонки status, використовуємо стару схему
+        if (insertError.code === '42703') { // column does not exist
+          console.log('⚠️ Використовуємо стару схему БД без колонки status');
+          await db.query(
+            `INSERT INTO leads (ig_id, first_seen)
+             VALUES ($1, $2)
+             ON CONFLICT (ig_id) DO NOTHING`,
+            [igId, ts]
+          );
+        } else {
+          throw insertError;
+        }
+      }
       
       // 2) Підтягнути username і full_name через Graph API
      const { rows: exist } = await db.query(
@@ -154,27 +170,44 @@ app.get('/leads', async (req, res) => {
   try {
     const { status } = req.query;
     
+    // Спочатку перевіряємо чи існує колонка is_own_account
     let query = `
       SELECT id, ig_id, username, full_name, first_seen, status
       FROM leads
-      WHERE (is_own_account IS FALSE OR is_own_account IS NULL)
     `;
+    
+    // Додаємо умову для is_own_account тільки якщо колонка існує
+    try {
+      await db.query(`SELECT is_own_account FROM leads LIMIT 1`);
+      query += ` WHERE (is_own_account IS FALSE OR is_own_account IS NULL)`;
+    } catch (columnError) {
+      console.log('⚠️ Колонка is_own_account не існує, пропускаємо фільтрацію');
+      // Колонка не існує, продовжуємо без фільтрації
+    }
     
     const params = [];
     
     // Фільтрація за статусом якщо передано
     if (status && status !== 'all') {
-      query += ` AND status = $1`;
+      const hasWhere = query.includes('WHERE');
+      query += hasWhere ? ` AND status = $1` : ` WHERE status = $1`;
       params.push(status);
     }
     
     query += ` ORDER BY first_seen DESC`;
     
+    console.log('🔍 Executing query:', query, 'with params:', params);
     const { rows } = await db.query(query, params);
+    console.log('✅ Found', rows.length, 'leads');
     res.json(rows);
   } catch (e) {
-    console.error('Error in GET /leads', e);
-    res.status(500).send('Server error');
+    console.error('❌ Error in GET /leads:', e.message);
+    console.error('Full error:', e);
+    res.status(500).json({ 
+      error: 'Server error', 
+      message: e.message,
+      code: e.code 
+    });
   }
 });
 
@@ -430,6 +463,78 @@ app.post('/chats/:id/send', async (req, res) => {
   } catch (error) {
     console.error('Error sending message:', error);
     res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Endpoint для запуску міграцій
+app.post('/admin/migrate', async (req, res) => {
+  try {
+    console.log('🔄 Запуск міграцій...');
+    
+    // Міграція 1: Додавання статусів та is_own_account
+    try {
+      await db.query(`
+        ALTER TABLE leads ADD COLUMN IF NOT EXISTS status VARCHAR(50) DEFAULT 'NEW';
+      `);
+      console.log('✅ Додано колонку status');
+    } catch (e) {
+      console.log('⚠️ Колонка status вже існує або помилка:', e.message);
+    }
+
+    try {
+      await db.query(`
+        ALTER TABLE leads ADD COLUMN IF NOT EXISTS is_own_account BOOLEAN DEFAULT FALSE;
+      `);
+      console.log('✅ Додано колонку is_own_account');
+    } catch (e) {
+      console.log('⚠️ Колонка is_own_account вже існує або помилка:', e.message);
+    }
+
+    // Оновлення існуючих записів
+    try {
+      await db.query(`
+        UPDATE leads SET status = 'NEW' WHERE status IS NULL OR status = '';
+      `);
+      console.log('✅ Оновлено статуси існуючих лідів');
+    } catch (e) {
+      console.log('⚠️ Помилка оновлення статусів:', e.message);
+    }
+
+    // Додавання constraint (може не спрацювати якщо вже існує)
+    try {
+      await db.query(`
+        ALTER TABLE leads 
+        ADD CONSTRAINT leads_status_check 
+        CHECK (status IN (
+          'NEW', 'CONTACTED', 'QUALIFIED', 'PROPOSAL', 'NEGOTIATION',
+          'CLOSED_WON', 'CLOSED_LOST', 'ON_HOLD', 'FOLLOW_UP'
+        ));
+      `);
+      console.log('✅ Додано constraint для статусів');
+    } catch (e) {
+      console.log('⚠️ Constraint вже існує або помилка:', e.message);
+    }
+
+    // Додавання індексів
+    try {
+      await db.query(`CREATE INDEX IF NOT EXISTS idx_leads_status ON leads(status);`);
+      await db.query(`CREATE INDEX IF NOT EXISTS idx_leads_is_own_account ON leads(is_own_account);`);
+      console.log('✅ Додано індекси');
+    } catch (e) {
+      console.log('⚠️ Індекси вже існують або помилка:', e.message);
+    }
+
+    console.log('🎉 Міграції завершено!');
+    res.json({ 
+      success: true, 
+      message: 'Міграції успішно застосовано' 
+    });
+  } catch (error) {
+    console.error('❌ Помилка міграції:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: error.message 
+    });
   }
 });
 
